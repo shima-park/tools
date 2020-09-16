@@ -10,9 +10,6 @@ import (
 type PartitionConsumer struct {
 	config PartitionConsumerConfig
 
-	master    sarama.Consumer
-	consumers []sarama.PartitionConsumer
-
 	wg       *sync.WaitGroup
 	done     chan struct{}
 	isClosed *atomic.Bool
@@ -34,27 +31,27 @@ func NewPartitionConsumer(config PartitionConsumerConfig) *PartitionConsumer {
 	}
 }
 
-func (c *PartitionConsumer) Start(handler func(*sarama.ConsumerMessage)) error {
-	var err error
-	c.master, err = sarama.NewConsumer(c.config.Addrs, nil)
+// Start 启动消费对应的partitions，如果传入的partitions为空，
+// 则会通过接口获取所有partitions，并启动对应数量的consumer去消费
+// 当handle返回false，则停止消费，退出循环，并close掉consumer
+func (c *PartitionConsumer) Start(handle func(*sarama.ConsumerMessage) bool) error {
+	master, err := sarama.NewConsumer(c.config.Addrs, nil)
 	if err != nil {
 		return err
 	}
 
 	if len(c.config.Partitions) == 0 {
-		c.config.Partitions, err = c.master.Partitions(c.config.Topic)
+		c.config.Partitions, err = master.Partitions(c.config.Topic)
 		if err != nil {
 			return err
 		}
 	}
 
 	for _, partition := range c.config.Partitions {
-		var consumer sarama.PartitionConsumer
-		consumer, err = c.master.ConsumePartition(c.config.Topic, partition, c.config.offset)
+		consumer, err := master.ConsumePartition(c.config.Topic, partition, c.config.Offset)
 		if err != nil {
 			return err
 		}
-		c.consumers = append(c.consumers, consumer)
 
 		c.wg.Add(1)
 		go func() {
@@ -66,7 +63,7 @@ func (c *PartitionConsumer) Start(handler func(*sarama.ConsumerMessage)) error {
 			for {
 				select {
 				case msg := <-consumer.Messages():
-					handler(msg)
+					handle(msg)
 				case <-c.done:
 					return
 				}
@@ -83,8 +80,6 @@ func (c *PartitionConsumer) Stop() {
 	}
 
 	close(c.done)
-
-	c.master.Close()
 
 	c.wg.Wait()
 }

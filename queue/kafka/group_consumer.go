@@ -11,8 +11,6 @@ import (
 type GroupConsumer struct {
 	config GroupConsumerConfig
 
-	group sarama.ConsumerGroup
-
 	wg       *sync.WaitGroup
 	done     chan struct{}
 	isClosed *atomic.Bool
@@ -34,15 +32,14 @@ func NewGroupConsumer(config GroupConsumerConfig) *GroupConsumer {
 	}
 }
 
-func (c *GroupConsumer) Start(errHandle func(error), handle func(*sarama.ConsumerMessage) (isAck bool)) error {
+func (c *GroupConsumer) Start(errHandle func(error), handle ConsumerGroupHandler) error {
 	if c.config.Config == nil {
 		c.config.Config = sarama.NewConfig()
 		c.config.Config.Version = sarama.V2_0_0_0
 		c.config.Config.Consumer.Return.Errors = true
 	}
 
-	var err error
-	c.group, err = sarama.NewConsumerGroup(c.config.Addrs, c.config.ConsumerGroup, c.config.Config)
+	group, err := sarama.NewConsumerGroup(c.config.Addrs, c.config.ConsumerGroup, c.config.Config)
 	if err != nil {
 		return err
 	}
@@ -51,7 +48,7 @@ func (c *GroupConsumer) Start(errHandle func(error), handle func(*sarama.Consume
 	go func() {
 		defer c.wg.Done()
 
-		for err := range c.group.Errors() {
+		for err := range group.Errors() {
 			if errHandle != nil {
 				errHandle(err)
 			}
@@ -63,9 +60,12 @@ func (c *GroupConsumer) Start(errHandle func(error), handle func(*sarama.Consume
 		defer c.wg.Done()
 
 		for !c.isClosed.Load() {
-			handler := consumerGroupHandler{handle: handle}
+			handler := consumerGroupHandler{
+				handle: handle,
+				done:   c.done,
+			}
 
-			err := c.group.Consume(context.Background(), c.config.Topics, handler)
+			err := group.Consume(context.Background(), c.config.Topics, handler)
 			if err != nil && errHandle != nil {
 				errHandle(err)
 			}
@@ -82,22 +82,31 @@ func (c *GroupConsumer) Stop() {
 
 	close(c.done)
 
-	c.group.Close()
-
 	c.wg.Wait()
 }
 
+type ConsumerGroupHandler func(*sarama.ConsumerMessage) (isAck, isContinue bool)
+
 type consumerGroupHandler struct {
-	handle func(*sarama.ConsumerMessage) bool
+	done   chan struct{}
+	handle ConsumerGroupHandler
 }
 
 func (consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
 func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for msg := range claim.Messages() {
-		if h.handle(msg) {
-			sess.MarkMessage(msg, "")
+	for {
+		select {
+		case msg := <-claim.Messages():
+			isAck, isContinue := h.handle(msg)
+			if isAck {
+				sess.MarkMessage(msg, "")
+			}
+			if !isContinue {
+				return nil
+			}
+		case <-h.done:
+			return nil
 		}
 	}
-	return nil
 }
