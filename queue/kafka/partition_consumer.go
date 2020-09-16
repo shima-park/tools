@@ -34,7 +34,7 @@ func NewPartitionConsumer(config PartitionConsumerConfig) *PartitionConsumer {
 // Start 启动消费对应的partitions，如果传入的partitions为空，
 // 则会通过接口获取所有partitions，并启动对应数量的consumer去消费
 // 当handle返回false，则停止消费，退出循环，并close掉consumer
-func (c *PartitionConsumer) Start(handle func(*sarama.ConsumerMessage) bool) error {
+func (c *PartitionConsumer) Start(handle func(*sarama.ConsumerMessage) (isContinue bool)) error {
 	master, err := sarama.NewConsumer(c.config.Addrs, nil)
 	if err != nil {
 		return err
@@ -63,7 +63,9 @@ func (c *PartitionConsumer) Start(handle func(*sarama.ConsumerMessage) bool) err
 			for {
 				select {
 				case msg := <-consumer.Messages():
-					handle(msg)
+					if !handle(msg) {
+						return
+					}
 				case <-c.done:
 					return
 				}
