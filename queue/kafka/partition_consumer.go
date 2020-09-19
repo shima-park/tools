@@ -1,17 +1,18 @@
 package kafka
 
 import (
-	"sync"
-
+	"context"
+	"errors"
 	"github.com/Shopify/sarama"
 	"go.uber.org/atomic"
+	"sync"
 )
 
 type PartitionConsumer struct {
 	config PartitionConsumerConfig
 
-	wg       *sync.WaitGroup
-	done     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
 	isClosed *atomic.Bool
 }
 
@@ -25,39 +26,56 @@ type PartitionConsumerConfig struct {
 func NewPartitionConsumer(config PartitionConsumerConfig) *PartitionConsumer {
 	return &PartitionConsumer{
 		config:   config,
-		wg:       &sync.WaitGroup{},
 		isClosed: atomic.NewBool(false),
-		done:     make(chan struct{}),
 	}
 }
+
+type PartitionConsumerHandler func(*sarama.ConsumerMessage) (isContinue bool)
 
 // Start 启动消费对应的partitions，如果传入的partitions为空，
 // 则会通过接口获取所有partitions，并启动对应数量的consumer去消费
 // 当handle返回false，则停止消费，退出循环，并close掉consumer
-func (c *PartitionConsumer) Start(handle func(*sarama.ConsumerMessage) (isContinue bool)) error {
+func (c *PartitionConsumer) Start(pctx context.Context, handle PartitionConsumerHandler) error {
+	if pctx == nil {
+		pctx = context.Background()
+	}
+	c.ctx, c.cancel = context.WithCancel(pctx)
+
+	if handle == nil {
+		return errors.New("The PartitionConsumerHandler cannot be nil")
+	}
+
 	master, err := sarama.NewConsumer(c.config.Addrs, nil)
 	if err != nil {
 		return err
 	}
 
-	if len(c.config.Partitions) == 0 {
-		c.config.Partitions, err = master.Partitions(c.config.Topic)
+	partitions := c.config.Partitions
+	if len(partitions) == 0 {
+		partitions, err = master.Partitions(c.config.Topic)
 		if err != nil {
 			return err
 		}
 	}
 
-	for _, partition := range c.config.Partitions {
-		consumer, err := master.ConsumePartition(c.config.Topic, partition, c.config.Offset)
+	var consumers []sarama.PartitionConsumer
+	for _, partition := range partitions {
+		consumer, err := master.ConsumePartition(
+			c.config.Topic, partition, c.config.Offset)
 		if err != nil {
 			return err
 		}
+		consumers = append(consumers, consumer)
+	}
 
-		c.wg.Add(1)
+	var wg sync.WaitGroup
+	for i := range consumers {
+		consumer := consumers[i]
+		wg.Add(1)
 		go func() {
 			defer func() {
 				consumer.Close()
-				c.wg.Done()
+				wg.Done()
 			}()
 
 			for {
@@ -66,12 +84,13 @@ func (c *PartitionConsumer) Start(handle func(*sarama.ConsumerMessage) (isContin
 					if !handle(msg) {
 						return
 					}
-				case <-c.done:
+				case <-c.ctx.Done():
 					return
 				}
 			}
 		}()
 	}
+	wg.Wait()
 
 	return nil
 }
@@ -81,7 +100,7 @@ func (c *PartitionConsumer) Stop() {
 		return
 	}
 
-	close(c.done)
-
-	c.wg.Wait()
+	if c.cancel != nil {
+		c.cancel()
+	}
 }

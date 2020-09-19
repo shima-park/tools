@@ -1,18 +1,19 @@
 package kafka
 
 import (
-	"sync"
+	"context"
+	"errors"
 
 	"github.com/Shopify/sarama"
 	"go.uber.org/atomic"
-	"golang.org/x/net/context"
 )
 
 type GroupConsumer struct {
 	config GroupConsumerConfig
 
-	wg       *sync.WaitGroup
-	done     chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	isClosed *atomic.Bool
 }
 
@@ -24,30 +25,35 @@ type GroupConsumerConfig struct {
 }
 
 func NewGroupConsumer(config GroupConsumerConfig) *GroupConsumer {
+	if config.Config == nil {
+		config.Config = sarama.NewConfig()
+		config.Config.Version = sarama.V2_0_0_0
+		config.Config.Consumer.Return.Errors = true
+	}
+
 	return &GroupConsumer{
 		config:   config,
-		wg:       &sync.WaitGroup{},
 		isClosed: atomic.NewBool(false),
-		done:     make(chan struct{}),
 	}
 }
 
-func (c *GroupConsumer) Start(errHandle func(error), handle ConsumerGroupHandler) error {
-	if c.config.Config == nil {
-		c.config.Config = sarama.NewConfig()
-		c.config.Config.Version = sarama.V2_0_0_0
-		c.config.Config.Consumer.Return.Errors = true
+func (c *GroupConsumer) Start(pctx context.Context, errHandle func(error), handle ConsumerGroupHandler) error {
+	if handle == nil {
+		return errors.New("The ConsumerGroupHandler cannot be nil")
 	}
+
+	if pctx == nil {
+		pctx = context.Background()
+	}
+	c.ctx, c.cancel = context.WithCancel(pctx)
 
 	group, err := sarama.NewConsumerGroup(c.config.Addrs, c.config.ConsumerGroup, c.config.Config)
 	if err != nil {
 		return err
 	}
+	defer group.Close()
 
-	c.wg.Add(1)
 	go func() {
-		defer c.wg.Done()
-
 		for err := range group.Errors() {
 			if errHandle != nil {
 				errHandle(err)
@@ -55,22 +61,22 @@ func (c *GroupConsumer) Start(errHandle func(error), handle ConsumerGroupHandler
 		}
 	}()
 
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-
-		for !c.isClosed.Load() {
+	for !c.isClosed.Load() {
+		select {
+		case <-c.ctx.Done():
+			return nil
+		default:
 			handler := consumerGroupHandler{
+				ctx:    c.ctx,
 				handle: handle,
-				done:   c.done,
 			}
 
-			err := group.Consume(context.Background(), c.config.Topics, handler)
+			err := group.Consume(c.ctx, c.config.Topics, handler)
 			if err != nil && errHandle != nil {
 				errHandle(err)
 			}
 		}
-	}()
+	}
 
 	return nil
 }
@@ -80,15 +86,15 @@ func (c *GroupConsumer) Stop() {
 		return
 	}
 
-	close(c.done)
-
-	c.wg.Wait()
+	if c.cancel != nil {
+		c.cancel()
+	}
 }
 
 type ConsumerGroupHandler func(*sarama.ConsumerMessage) (isAck, isContinue bool)
 
 type consumerGroupHandler struct {
-	done   chan struct{}
+	ctx    context.Context
 	handle ConsumerGroupHandler
 }
 
@@ -105,7 +111,7 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 			if !isContinue {
 				return nil
 			}
-		case <-h.done:
+		case <-h.ctx.Done():
 			return nil
 		}
 	}

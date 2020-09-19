@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestGenerateColumnPrefix(t *testing.T) {
+func TestGenerateExcelColumnPrefix(t *testing.T) {
 	var tests = []struct {
 		Case     int
 		Expected string
@@ -19,7 +19,7 @@ func TestGenerateColumnPrefix(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		actual := generateColumnPrefix(test.Case)
+		actual := GenerateExcelColumnPrefix(test.Case)
 		fmt.Println(test.Case, actual)
 		assert.Equal(t, test.Expected, actual)
 	}
