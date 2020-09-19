@@ -1,8 +1,10 @@
 package pdf
 
 import (
-	"github.com/ledongthuc/pdf"
-	"os"
+	"bytes"
+	"github.com/lu4p/unipdf/v3/extractor"
+	pdf "github.com/lu4p/unipdf/v3/model"
+	"io/ioutil"
 	"strings"
 )
 
@@ -29,38 +31,41 @@ func (pages Pages) String() string {
 }
 
 func ExtractPages(filepath string) ([]Page, error) {
-	f, err := os.Open(filepath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	fi, err := f.Stat()
+	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		return nil, err
 	}
 
-	r, err := pdf.NewReader(f, fi.Size())
+	pdfReader, err := pdf.NewPdfReader(bytes.NewReader(content))
 	if err != nil {
 		return nil, err
 	}
 
-	pageNums := r.NumPage()
+	numPages, err := pdfReader.GetNumPages()
+	if err != nil {
+		return nil, err
+	}
+
 	var pages []Page
-	fonts := make(map[string]*pdf.Font)
-	for i := 1; i <= pageNums; i++ {
-		p := r.Page(i)
-		for _, name := range p.Fonts() { // cache fonts so we don't continually parse charmap
-			if _, ok := fonts[name]; !ok {
-				f := p.Font(name)
-				fonts[name] = &f
-			}
-		}
-		text, err := p.GetPlainText(fonts)
+	for i := 0; i < numPages; i++ {
+		pageNum := i + 1
+
+		page, err := pdfReader.GetPage(pageNum)
 		if err != nil {
 			return nil, err
 		}
-		pages = append(pages, Page{Num: i, Text: text})
+
+		ex, err := extractor.New(page)
+		if err != nil {
+			return nil, err
+		}
+
+		text, err := ex.ExtractText()
+		if err != nil {
+			return nil, err
+		}
+
+		pages = append(pages, Page{Num: pageNum, Text: text})
 	}
 	return pages, nil
 }
