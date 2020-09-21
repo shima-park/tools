@@ -2,10 +2,12 @@ package pdf
 
 import (
 	"bytes"
-	"github.com/lu4p/unipdf/v3/extractor"
-	pdf "github.com/lu4p/unipdf/v3/model"
+	"errors"
 	"io/ioutil"
 	"strings"
+
+	"github.com/lu4p/unipdf/v3/extractor"
+	pdf "github.com/lu4p/unipdf/v3/model"
 )
 
 type Page struct {
@@ -31,6 +33,14 @@ func (pages Pages) String() string {
 }
 
 func ExtractPages(filepath string) ([]Page, error) {
+	return extractPages(filepath, nil)
+}
+
+func ExtractPagesWithPassword(filepath string, password []byte) ([]Page, error) {
+	return extractPages(filepath, password)
+}
+
+func extractPages(filepath string, password []byte) ([]Page, error) {
 	content, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		return nil, err
@@ -39,6 +49,21 @@ func ExtractPages(filepath string) ([]Page, error) {
 	pdfReader, err := pdf.NewPdfReader(bytes.NewReader(content))
 	if err != nil {
 		return nil, err
+	}
+
+	isEncrypted, err := pdfReader.IsEncrypted()
+	if err != nil {
+		return nil, err
+	}
+
+	if isEncrypted {
+		ok, err := pdfReader.Decrypt(password)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors.New("This pdf file need be decrypt first")
+		}
 	}
 
 	numPages, err := pdfReader.GetNumPages()
