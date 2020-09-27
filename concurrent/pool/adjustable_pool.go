@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"errors"
-	_ "net/http/pprof"
 	"sync"
 	"sync/atomic"
 )
@@ -106,7 +105,7 @@ func (p *AdjustablePool) Running() int {
 	return int(atomic.LoadInt32(&p.running))
 }
 
-func (p *AdjustablePool) Exciting() int {
+func (p *AdjustablePool) Exiting() int {
 	return int(atomic.LoadInt32(&p.exiting))
 }
 

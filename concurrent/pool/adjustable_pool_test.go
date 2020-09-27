@@ -32,21 +32,21 @@ func TestAdjuestablePool(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 	assert.Equal(t, 10, p.Running())
-	assert.Equal(t, 0, p.Exciting())
-	fmt.Println("Running:", p.Running(), "Exciting:", p.Exciting())
+	assert.Equal(t, 0, p.Exiting())
+	fmt.Println("Running:", p.Running(), "Exiting:", p.Exiting())
 
 	time.Sleep(time.Second)
 
 	p.Reduce(9)
-	fmt.Println("Running:", p.Running(), "Exciting:", p.Exciting())
-	assert.GreaterOrEqual(t, 9, p.Exciting())
+	fmt.Println("Running:", p.Running(), "Exiting:", p.Exiting())
+	assert.GreaterOrEqual(t, 9, p.Exiting())
 	time.Sleep(time.Second)
 	assert.Equal(t, 1, p.Running())
 
 	time.Sleep(time.Second)
 
 	p.Stop()
-	assert.GreaterOrEqual(t, 0, p.Exciting())
+	assert.GreaterOrEqual(t, 0, p.Exiting())
 	assert.Equal(t, 0, p.Running())
-	fmt.Println("Running:", p.Running(), "Exciting:", p.Exciting())
+	fmt.Println("Running:", p.Running(), "Exiting:", p.Exiting())
 }
