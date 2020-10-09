@@ -26,9 +26,10 @@ type WorkerFactory func(interface{}) (Worker, error)
 type Worker func(ctx context.Context)
 
 type ContextWithWorker struct {
-	Ctx    context.Context
-	Cancel context.CancelFunc
-	Worker Worker
+	Ctx      context.Context
+	Cancel   context.CancelFunc
+	Worker   Worker
+	Callback func()
 }
 
 func NewAdjustablePool(f WorkerFactory) (*AdjustablePool, error) {
@@ -71,7 +72,9 @@ func (p *AdjustablePool) Add(i int, v interface{}) error {
 		go func() {
 			defer func() {
 				atomic.AddInt32(&p.running, -1)
-				atomic.AddInt32(&p.exiting, -1)
+				if cw.Callback != nil {
+					cw.Callback()
+				}
 				p.wg.Done()
 			}()
 
@@ -94,6 +97,9 @@ func (p *AdjustablePool) Reduce(i int) error {
 	for ; i > 0 && len(p.workers) > 0; i-- {
 		k := len(p.workers) - 1
 		worker := p.workers[k]
+		worker.Callback = func() {
+			atomic.AddInt32(&p.exiting, -1)
+		}
 		worker.Cancel()
 		atomic.AddInt32(&p.exiting, 1)
 		p.workers = append(p.workers[:k], p.workers[k+1:]...)
@@ -124,7 +130,7 @@ func (p *AdjustablePool) Stop() {
 	}
 	close(p.done)
 
-	p.Reduce(len(p.workers))
+	_ = p.Reduce(len(p.workers))
 
 	p.wg.Wait()
 }

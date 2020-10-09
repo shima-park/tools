@@ -37,7 +37,8 @@ func TestAdjuestablePool(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	p.Reduce(9)
+	err = p.Reduce(9)
+	assert.Nil(t, err)
 	fmt.Println("Running:", p.Running(), "Exiting:", p.Exiting())
 	assert.GreaterOrEqual(t, 9, p.Exiting())
 	time.Sleep(time.Second)
