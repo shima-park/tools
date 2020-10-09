@@ -26,10 +26,23 @@ type WorkerFactory func(interface{}) (Worker, error)
 type Worker func(ctx context.Context)
 
 type ContextWithWorker struct {
-	Ctx      context.Context
-	Cancel   context.CancelFunc
-	Worker   Worker
-	Callback func()
+	ctx       context.Context
+	cancel    context.CancelFunc
+	worker    Worker
+	runBefore func()
+	runAfter  func()
+}
+
+func (w *ContextWithWorker) Run() {
+	defer w.runAfter()
+
+	w.runBefore()
+
+	w.worker(w.ctx)
+}
+
+func (w *ContextWithWorker) Stop() {
+	w.cancel()
 }
 
 func NewAdjustablePool(f WorkerFactory) (*AdjustablePool, error) {
@@ -46,6 +59,24 @@ func NewAdjustablePool(f WorkerFactory) (*AdjustablePool, error) {
 	return p, nil
 }
 
+func (p *AdjustablePool) newContextWithWorker(worker Worker) *ContextWithWorker {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &ContextWithWorker{
+		ctx:    ctx,
+		cancel: cancel,
+		worker: worker,
+		runBefore: func() {
+			p.wg.Add(1)
+			atomic.AddInt32(&p.running, 1)
+		},
+		runAfter: func() {
+			atomic.AddInt32(&p.running, -1)
+			atomic.AddInt32(&p.exiting, -1)
+			p.wg.Done()
+		},
+	}
+}
+
 func (p *AdjustablePool) Add(i int, v interface{}) error {
 	if i <= 0 {
 		return nil
@@ -59,29 +90,12 @@ func (p *AdjustablePool) Add(i int, v interface{}) error {
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		cw := &ContextWithWorker{
-			Ctx:    ctx,
-			Cancel: cancel,
-			Worker: worker,
-		}
+
+		cw := p.newContextWithWorker(worker)
 
 		p.workers = append(p.workers, cw)
 
-		p.wg.Add(1)
-		go func() {
-			defer func() {
-				atomic.AddInt32(&p.running, -1)
-				if cw.Callback != nil {
-					cw.Callback()
-				}
-				p.wg.Done()
-			}()
-
-			atomic.AddInt32(&p.running, 1)
-
-			worker(ctx)
-		}()
+		go cw.Run()
 	}
 	return nil
 }
@@ -97,10 +111,7 @@ func (p *AdjustablePool) Reduce(i int) error {
 	for ; i > 0 && len(p.workers) > 0; i-- {
 		k := len(p.workers) - 1
 		worker := p.workers[k]
-		worker.Callback = func() {
-			atomic.AddInt32(&p.exiting, -1)
-		}
-		worker.Cancel()
+		worker.Stop()
 		atomic.AddInt32(&p.exiting, 1)
 		p.workers = append(p.workers[:k], p.workers[k+1:]...)
 	}
