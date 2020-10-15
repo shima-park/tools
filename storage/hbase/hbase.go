@@ -84,7 +84,7 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 
 		Loop:
 			for {
-				results, err := c.ScannerGet(ctx, scannerID)
+				results, err := c.ScannerGetList(ctx, scannerID, 1000)
 				if err != nil {
 					errHandle(err)
 					break Loop
