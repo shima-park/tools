@@ -39,43 +39,53 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 
 	ch := make(chan *ScanMessage, 1)
 
-	scannerID, err := c.ScannerOpenWithStop(
-		ctx, []byte(table), []byte(start), []byte(end), columns, attributes,
-	)
-	if err != nil {
-		ch <- &ScanMessage{
-			Err: err,
-		}
-		return ch
-	}
-
 	go func() {
-		defer c.ScannerClose(context.Background(), scannerID)
-		defer close(ch)
+		errHandle := func(err error) {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- &ScanMessage{Err: err}:
 
-		var caching int32 = 1000
-		for {
-			results, err := c.ScannerGetList(ctx, scannerID, caching)
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				case ch <- &ScanMessage{
-					Err: err,
-				}:
-				}
-				break
 			}
+		}
 
-			if len(results) == 0 {
-				break
-			}
+		resultHandle := func(results []*hbase.TRowResult_) {
 			select {
 			case <-ctx.Done():
 				return
 			case ch <- &ScanMessage{
 				Results: results,
 			}:
+			}
+		}
+
+		defer close(ch)
+
+		for {
+			scannerID, err := c.ScannerOpenWithStop(
+				ctx, []byte(table), []byte(start), []byte(end), columns, attributes,
+			)
+			if err != nil {
+				errHandle(err)
+				return
+			}
+			defer c.ScannerClose(context.Background(), scannerID)
+
+			var caching int32 = 1000
+			for {
+				results, err := c.ScannerGetList(ctx, scannerID, caching)
+				if err != nil {
+					errHandle(err)
+					return
+				}
+
+				if len(results) == 0 {
+					return
+				} else {
+					start = string(results[len(results)-1].Row)
+				}
+
+				resultHandle(results)
 			}
 		}
 
