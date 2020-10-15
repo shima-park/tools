@@ -37,7 +37,7 @@ type ScanMessage struct {
 func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 	columns []hbase.Text, attributes map[string]hbase.Text) chan *ScanMessage {
 
-	ch := make(chan *ScanMessage, 64)
+	ch := make(chan *ScanMessage, 1)
 
 	scannerID, err := c.ScannerOpenWithStop(
 		ctx, []byte(table), []byte(start), []byte(end), columns, attributes,
@@ -51,6 +51,7 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 
 	go func() {
 		defer c.ScannerClose(context.Background(), scannerID)
+		defer close(ch)
 
 		var caching int32 = 1000
 		for {
@@ -58,7 +59,7 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 			if err != nil {
 				select {
 				case <-ctx.Done():
-					break
+					return
 				case ch <- &ScanMessage{
 					Err: err,
 				}:
@@ -71,14 +72,13 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 			}
 			select {
 			case <-ctx.Done():
-				break
+				return
 			case ch <- &ScanMessage{
 				Results: results,
 			}:
 			}
 		}
 
-		close(ch)
 	}()
 	return ch
 }
