@@ -6,6 +6,7 @@ require (
 	github.com/360EntSecGroup-Skylar/excelize v1.4.1
 	github.com/Shopify/sarama v1.27.0
 	github.com/apache/thrift v0.13.0
+	github.com/go-redis/redis/v8 v8.3.1
 	github.com/lu4p/unipdf/v3 v3.7.1
 	github.com/stretchr/testify v1.6.1
 	go.uber.org/atomic v1.7.0
