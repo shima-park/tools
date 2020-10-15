@@ -39,56 +39,78 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 
 	ch := make(chan *ScanMessage, 1)
 
+	errHandle := func(err error) {
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- &ScanMessage{
+			Err: err,
+		}:
+		}
+	}
+
+	resultHandle := func(results []*hbase.TRowResult_) {
+		if len(results) == 0 {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- &ScanMessage{
+			Results: results,
+		}:
+		}
+	}
+
 	go func() {
-		errHandle := func(err error) {
-			select {
-			case <-ctx.Done():
-				return
-			case ch <- &ScanMessage{Err: err}:
-
-			}
-		}
-
-		resultHandle := func(results []*hbase.TRowResult_) {
-			select {
-			case <-ctx.Done():
-				return
-			case ch <- &ScanMessage{
-				Results: results,
-			}:
-			}
-		}
-
 		defer close(ch)
 
+		var caching int32 = 1000
+		scan := &hbase.TScan{
+			StartRow: []byte(start),
+			StopRow:  []byte(end),
+			Caching:  &caching,
+			Columns:  columns,
+		}
+
 		for {
-			scannerID, err := c.ScannerOpenWithStop(
-				ctx, []byte(table), []byte(start), []byte(end), columns, attributes,
-			)
+			scannerID, err := c.ScannerOpenWithScan(ctx, []byte(table), scan, attributes)
 			if err != nil {
 				errHandle(err)
 				return
 			}
 			defer c.ScannerClose(context.Background(), scannerID)
 
-			var caching int32 = 1000
+		Loop:
 			for {
-				results, err := c.ScannerGetList(ctx, scannerID, caching)
+				results, err := c.ScannerGet(ctx, scannerID)
 				if err != nil {
 					errHandle(err)
-					return
+					break Loop
 				}
+
+				resultHandle(results)
 
 				if len(results) == 0 {
 					return
 				} else {
-					start = string(results[len(results)-1].Row)
+					nextStartRow := createClosestRowAfter(results[len(results)-1].Row)
+					scan.StartRow = nextStartRow
 				}
-
-				resultHandle(results)
 			}
 		}
 
 	}()
 	return ch
+}
+
+func createClosestRowAfter(row []byte) []byte {
+	var nextRow []byte
+	var i int
+	for i = 0; i < len(row); i++ {
+		nextRow = append(nextRow, row[i])
+	}
+	nextRow = append(nextRow, 0x00)
+	return nextRow
 }
