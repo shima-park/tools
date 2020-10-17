@@ -2,31 +2,50 @@ package hbase
 
 import (
 	"context"
+	"errors"
+	"io"
+	"sync"
+	"syscall"
+	"time"
 
 	"github.com/apache/thrift/lib/go/thrift"
 	"github.com/shima-park/tools/storage/hbase/gen-go/hbase"
 )
 
 type HBaseClient struct {
+	lock   *sync.Mutex
+	addr   string
+	closer func() error
 	*hbase.HbaseClient
 }
 
 func NewHBaseClient(addr string) (*HBaseClient, error) {
-	trans, err := thrift.NewTSocket(addr)
+	client, closer, err := newHBaseClient(addr)
 	if err != nil {
 		return nil, err
+	}
+
+	return &HBaseClient{
+		lock:        &sync.Mutex{},
+		addr:        addr,
+		closer:      closer,
+		HbaseClient: client,
+	}, nil
+}
+
+func newHBaseClient(addr string) (*hbase.HbaseClient, func() error, error) {
+	trans, err := thrift.NewTSocket(addr)
+	if err != nil {
+		return nil, nil, err
 	}
 	protocolFactory := thrift.NewTBinaryProtocolFactoryDefault()
 	iprot := protocolFactory.GetProtocol(trans)
 	oprot := protocolFactory.GetProtocol(trans)
 	client := thrift.NewTStandardClient(iprot, oprot)
 	if err := trans.Open(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
-	return &HBaseClient{
-		hbase.NewHbaseClient(client),
-	}, nil
+	return hbase.NewHbaseClient(client), trans.Close, nil
 }
 
 type ScanMessage struct {
@@ -77,8 +96,23 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 		for {
 			scannerID, err := c.ScannerOpenWithScan(ctx, []byte(table), scan, attributes)
 			if err != nil {
+				if err == io.EOF || errors.Is(err, syscall.EPIPE) {
+					for retries := 0; retries < 30; retries++ {
+						client, closer, err := newHBaseClient(c.addr)
+						if err != nil {
+							time.Sleep(time.Second)
+							continue
+						}
+						c.lock.Lock()
+						c.closer()
+						c.HbaseClient = client
+						c.closer = closer
+						c.lock.Unlock()
+						break
+					}
+				}
 				errHandle(err)
-				return
+				continue
 			}
 
 			for {
