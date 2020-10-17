@@ -73,7 +73,7 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 			Caching:  &caching,
 			Columns:  columns,
 		}
-	Exit:
+
 		for {
 			scannerID, err := c.ScannerOpenWithScan(ctx, []byte(table), scan, attributes)
 			if err != nil {
@@ -81,24 +81,22 @@ func (c *HBaseClient) Scan(ctx context.Context, table, start, end string,
 				return
 			}
 
-		Loop:
 			for {
 				results, err := c.ScannerGetList(ctx, scannerID, 1000)
 				if err != nil {
 					errHandle(err)
-					break Loop
+					scan.StartRow = createClosestRowAfter(scan.StartRow)
+					c.ScannerClose(context.Background(), scannerID) //不传入当前上下文，防止未Close就退出了
+					break
 				}
 
-				resultHandle(results)
-
-				if len(results) == 0 {
-					break Exit
+				if len(results) > 0 {
+					resultHandle(results)
+					scan.StartRow = results[len(results)-1].Row
 				} else {
-					nextStartRow := createClosestRowAfter(results[len(results)-1].Row)
-					scan.StartRow = nextStartRow
+					return
 				}
 			}
-			c.ScannerClose(context.Background(), scannerID) //不传入当前上下文，防止未Close就退出了
 		}
 
 	}()
