@@ -67,7 +67,6 @@ func (c *GroupConsumer) Start(pctx context.Context, errHandle func(error), handl
 			return nil
 		default:
 			handler := consumerGroupHandler{
-				ctx:    c.ctx,
 				handle: handle,
 			}
 
@@ -94,25 +93,23 @@ func (c *GroupConsumer) Stop() {
 type ConsumerGroupHandler func(*sarama.ConsumerMessage) (isAck, isContinue bool)
 
 type consumerGroupHandler struct {
-	ctx    context.Context
 	handle ConsumerGroupHandler
 }
 
 func (consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
 func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for {
-		select {
-		case msg := <-claim.Messages():
-			isAck, isContinue := h.handle(msg)
-			if isAck {
-				sess.MarkMessage(msg, "")
-			}
-			if !isContinue {
-				return nil
-			}
-		case <-h.ctx.Done():
+	for msg := range claim.Messages() {
+		if msg != nil {
+			continue
+		}
+		isAck, isContinue := h.handle(msg)
+		if isAck {
+			sess.MarkMessage(msg, "")
+		}
+		if !isContinue {
 			return nil
 		}
 	}
+	return nil
 }
