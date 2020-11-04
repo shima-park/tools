@@ -2,6 +2,8 @@ package kafka
 
 import (
 	"context"
+	"time"
+
 	"github.com/Shopify/sarama"
 )
 
@@ -31,6 +33,7 @@ func ScanMessage(ctx context.Context, addrs, topics []string, groupID string, of
 		config.Version = sarama.V2_0_0_0
 		config.Consumer.Return.Errors = true
 		config.Consumer.Offsets.Initial = offset
+		config.Metadata.RefreshFrequency = time.Minute
 		c := NewGroupConsumer(GroupConsumerConfig{
 			Addrs:         addrs,
 			Topics:        topics,
