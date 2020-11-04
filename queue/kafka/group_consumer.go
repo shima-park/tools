@@ -100,7 +100,7 @@ func (consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { retur
 func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for msg := range claim.Messages() {
-		if msg != nil {
+		if msg == nil {
 			continue
 		}
 		isAck, isContinue := h.handle(msg)
